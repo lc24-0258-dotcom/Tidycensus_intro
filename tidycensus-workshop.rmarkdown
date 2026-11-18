@@ -1,0 +1,764 @@
+---
+title: "Introduction to tidycensus"
+format: html
+editor: visual
+---
+
+## Introduction to *tidycensus* - outline
+
+- What is tidycensus?
+
+- Census concepts
+
+- Getting an API key
+
+- Finding census variables
+
+- Querying data
+
+- Merging drinking water contaminant data with census data
+
+------------------------------------------------------------------------
+
+## What is tidycensus?
+
+- **tidycensus** is an R package that lets you:
+
+  - Query and receive census data in your R environment
+
+  - Augment that data with geographic information, allowing easy mapping
+
+- More in-depth functionality available in Kyle Walker's book, "Analyzing US Census Data: Methods, Maps, and Models in R" ([online home](https://walker-data.com/census-r/)).
+
+------------------------------------------------------------------------
+
+## Census concepts
+
+- **Census Data (Decennial)**
+
+  - Starting in 1790, taken every 10 years
+
+  - Intended to be a complete enumeration of the US population to assist with *apportionment* (balanced arrangement of Congressional Districts)
+
+  - Asks a limited set of questions on race, ethnicity, age, sex, and housing tenure
+
+  - Aims to be precise counts (not estimates)
+
+- **American Community Survey (formerly Census Long Form)**
+
+  - Started before 2010 decennial Census
+
+  - Premier source of detailed demographic information about the US population
+
+  - Mailed annually to \~3.5% of US households
+
+  - Two data sets are released:
+
+    - **1-year ACS** - covers areas of population 65,000 and greater
+
+    - **5-year ACS** - moving *average* of data over a 5-year period that covers geographies down to the Census block group
+
+  - Estimates (not precise counts)
+
+  - Most recent 5-year ACS: 2023
+
+- **Enumerations / Geographical Units**
+
+  - States
+
+  - Counties
+
+  - Zip Code Tabulation Areas (represents postal code geographies; don't nest within a parent geography like county or state)
+
+  - Census Tracts (nest within counties)
+
+  - Block Groups (smallest unit for ACS)
+
+  - Block (smallest unit for Census)
+
+Summary image from esri documentation website (<https://learn.arcgis.com/en/related-concepts/united-states-census-geography.htm>)
+
+[![image from Esri https://learn.arcgis.com/en/related-concepts/united-states-census-geography.htm](geographical%20units.png)](https://learn.arcgis.com/en/related-concepts/united-states-census-geography.htm)
+
+- **Requesting Data**
+
+  - Aggregated census data is publicly available, via these pathways:
+
+    - From the census [website](https://data.census.gov/){target="_blank"}
+
+    - File Transfer Protocol (FTP) - To download raw data, see the [US Census Bureau's FTP](https://www2.census.gov/) and the [American Community Survey Data via FTP](https://www.census.gov/programs-surveys/acs/data/data-via-ftp.html) websites. If you are an FTP client, you can download data at ftp2.census.gov.
+
+    - Application Programming Interface (API) - make targeted requests, typically with code. Typically you follow their [documentation](https://www.census.gov/data/developers/guidance/api-user-guide.html){target="_blank"} and acquire a key.
+
+  - The **tidycensus package** uses the Application Programming Interface (API). As is common with most APIs, you need a key in order to use it.
+
+------------------------------------------------------------------------
+
+## Getting an API key
+
+- Register for an API key here: <https://api.census.gov/data/key_signup.html>
+
+- In a few minutes, you should get a message in your inbox with the key, and a link to verify.
+
+Once you receive your API key, open the file `key.R` (see "Files" tab in the lower right section) and insert your API key as the first argument in the `census_api_key` function as shown below. The `key.R` file is a R Script file; you can create a new R Script file using the "New file" pull down menu in the "Files" tab in the lower right section. R script files are plain text files containing commands in R programming language; they allow you to write, save, and rerun code without typing the commands. In this example, we use the `source` function to run the census_api_key command in `key.R`, rather than typing out that command: `source("key.R")`.
+
+```         
+
+census_api_key("KEY-GOES-HERE", install = TRUE, overwrite = TRUE)
+```
+
+Use the code chunk below to load the required libraries and make the key available to our R environment. Recall that **tidycensus** is the R package that allows users to interface with the US Census Bureau data and return data frames. The **tidyverse** package is one of R's core packages and contains **ggplot2** for creating graphics, **dplyr** for data manipulation, **tidyr** to help organize data in a table, and many other packages. The **sf** package provides tools for geospatial analysis in R.
+
+The `readRenviron("~/.Renviron")` command stores your API key securely outside of the main R code so this code will not be published. It also allows new or updated variables (like the API key) to take effect without restarting the R session.
+
+```{r}
+
+
+#note: packages are pre-installed
+#if starting from scratch, you would need to run:
+#install.packages("tidycensus")
+#install.packages("tidyverse")
+#install.packages("sf")
+
+
+#load libraries
+library(tidycensus)
+library(tidyverse)
+library(sf)
+
+# register API key
+source("key.R")
+readRenviron("~/.Renviron")
+
+
+```
+
+------------------------------------------------------------------------
+
+## Finding census variables
+
+The census data is complex and contains many different variables (for example, age, sex, ethnicity, whether a housing unit is owner occupied or vacant, employment status, and health insurance coverage). In order to use the census data, you will first need to identify the abbreviation for the specific variable that you are interested in. Note that the possible variables depend on whether you intend to query the Decennial Census or the American Community Survey. This [Census Reporter website](https://censusreporter.org/topics/) explains many of the terms used in the census and many useful variables.
+
+To i[dentify the variables]{.underline} available in a given data set as well as their corresponding abbreviations, use the **load_variables** function. The argument for the load_variable function is (year, "dataset", cache). **year** refers to the year that you are interested in (keep in mind that the possible years depend on whether you're querying the Decennial Census or the American Community Survey). **"dataset"** refers to the source of the data.
+
+- For the 2000 or 2010 Decennial Census, use "sf1" or "sf2" as the data set name to access variables from Summary Files 1 or 2. "sf1" and "sf2" both focus on basic demographic (sex, age, and race) and housing characteristics (household relationship and owned/rented) for the total population but the "sf2" data set organizes the data by race or tribe and doesn't have data tables for areas with populations less than 100.
+
+- For the 2000 Decennial Census, "sf3" and "sf4" give more detailed demographic information (income and occupation)
+
+- For the 2020 Decennial Census, the only data set currently available is "pl" (the redistricting data set).
+
+- For the American Community Survey, use "acs1" for the 1-year ACS or "acs5" for the 5-year moving average.
+
+**cache** can be TRUE or FALSE if cache = TRUE, it means that the data will be stored in your cache directory for future access so on future requests, the function can look in the directory rather than the Census website.
+
+In the example chunk below, we use the load_variables function to see the variables and their abbreviations (IDs) in the 2010 Decennial Census comparing Summary File 1 and Summary File 2. Open up the resulting data frames, which can accessed in the "Environment" tab in the upper right quadrant and you will see that the files have different categories as well as different sizes.
+
+```{r}
+
+#vars_decennial_sf1 will contain the variables in the 2010 Dicennial Census from Summary File 1
+
+vars_decennial_sf1 <- load_variables(2010, "sf1", cache = TRUE)  
+
+#vars_decennial_sf2 will contain the variables in the 2010 Dicennial Census from Summary File 2
+
+vars_decennial_sf2 <- load_variables(2010, "sf2", cache = TRUE)  
+```
+
+------------------------------------------------------------------------
+
+Below is an example of using the load_variables function to see the variables and their abbreviations (IDs) in the 2023 and 2016 American Community Survey for a 5-year average. Note that the data frames from the American Community Survey contain one more column (geography) than data frames from the Decennial Survey.
+
+```{r}
+
+vars_2023 <- load_variables(2023, "acs5", cache = TRUE)
+
+
+vars_2016 <- load_variables(2016, "acs5", cache = TRUE)
+
+#vars_2023 contains the variables in the 5-year moving average in the 2023 American Community Survey data set while vars_2016 contains the variables in the 5-year moving average in the 2016 American Community Survey data set. Note that the variables from the two different years are slightly different.
+
+
+```
+
+As you can see, the number of variables available from the Census is quite large. There are almost 9000 in "sf1", 1520 in "sf2", over 28,000 in "acs5" for 2023, and almost 23,000 in "acs5" for 2016.
+
+To answer targeted questions (i.e., choose specific variables), you will need to sift through the table of variables by either using the View( ) function or clicking on the data file, which can be found in the "Environment" tab in the upper right corner. When you open the data file, you can make use of the search function to help you find the variables to help you address your question.
+
+```{r}
+
+view(vars_decennial_sf1)
+```
+
+![](images/clipboard-719064258.png)
+
+Alternatively, you can write code to search the variable data frames for specific words or phrases. For example, suppose you are interested in using the Decennial Census to examine whether a drinking water contaminant correlates with the percentage of vacant houses for a certain geographical range. To do this, you will need to calculate the percentage of vacant houses as a function of the same geography (county, zip code, etc.) that is available in the drinking water data. To get the percentage of vacant houses, you need to know the total number of houses and the total number of vacant houses in a given geography unit. You can find the relevant variables by searching for the term "occupancy" using the function `grepl(pattern, x, ignore.case = )`. In the `grepl` function, pattern corresponds to the term you are searching for (should be in quotes), x refers to the vector you are searching (in this case the column in the data frame), and ignore.care sets whether or not the search is case-sensitive. In the code chunk below, we create a new data frame by filtering the vars_decennial_sf1 data set for entries containing the term "occupancy" in the concept column.
+
+```{r}
+
+#grepl performs a logical text search; we can't use filter alone because there are not exact matches to "occupancy"
+
+housing_variables <- vars_decennial_sf1 %>%
+ filter(grepl("occupancy", concept, ignore.case = TRUE))
+
+
+```
+
+This search gives us the relevant variables:
+
+![](images/clipboard-2780268645.png)
+
+Note that if we repeat this search with the vars_decennial_sf2 data set no variables appear since "occupancy" never appears. We could try searching for "occupied" using the code chunk below but there is no corresponding "unoccupied". Also note that in the "sf1" data set, "occupied" refers to the number of housing units whereas in the "sf2" data set, "occupied housing units" refer to population.
+
+```{r}
+
+housing_variables_sf2 <- vars_decennial_sf2 %>%
+ filter(grepl("occupied", concept, ignore.case = TRUE))
+
+```
+
+![](images/clipboard-2197206638.png)
+
+This result suggests that it might also be interesting to look at correlations with the % of renter occupied population. By searching for variables containing the term "renter", we can consider an even more granular level or renters. See the code chunk below and resulting output. Note that in the census, "tenure" refers to renter-occupied (related to the word "tenant").
+
+```{r}
+
+# note that "renter" does not appear in the "concept" column so the search must be done in the "label" column
+
+housing_variables_sf2_renter <- vars_decennial_sf2 %>%
+ filter(grepl("renter", label, ignore.case = TRUE))
+```
+
+![](images/clipboard-2645461097.png)
+
+As another example, we may be interested in the percent of the population in a given area that has an income below the poverty level. For this question, we will need to use the ACS 5 year survey.
+
+```{r}
+
+poverty_level_variables <- vars_2023 %>%
+ filter(grepl("poverty", concept, ignore.case = TRUE))
+
+
+```
+
+Note that "poverty_level_variables" is a large file. In this case, it's helpful to refer to the ["Poverty" link on the Census Reporter website](https://censusreporter.org/topics/poverty/). Scrolling down shows suggested variables to use. Replacing the B with a C gives the collapsed version (so the information isn't broken down as far). For my study, C17002 matches what I'm most interested in. I can search this variable in "vars_2023" and it does return what I'm interested in.
+
+![](images/clipboard-2919399511.png)
+
+![](images/clipboard-2142750765.png)
+
+## Your turn...
+
+Identify the the variable IDs for another census parameter you might be interested in studying. Some search terms to consider are "insurance", "income", "education", "transportation", "vehicle", "housing", "ancestry", "health", "occupation", etc.
+
+Use the code chunk below to create a data frame containing a set of variable IDs
+
+```{r}
+
+
+
+
+```
+
+## Querying Data
+
+Once you know the census variables for the information you're interested in, you can get the associated data. There are two main functions for querying data, depending on whether your data is from the Decennial Census or the American Community Survey:
+
+- `get_decennial` - queries data from decennial census
+
+- `get_acs` - queries data from American Community Survey
+
+## Querying Data From Decennial Census
+
+Let's say we're interested in looking at the percentage of vacant housing in Oregon in 2010 by census tract.
+
+We previously found the relevant Decennial Census variables:
+
+![](images/clipboard-2780268645.png)
+
+Now we can use the `get_decennial( )` function to create a data set giving the number of total housing units and vacant housing units **by tract**. This will allow us to (eventually) calculate the percent vacant housing. Documentation on the `get_decennial( )` function is available [here](https://www.rdocumentation.org/packages/tidycensus/versions/1.6.7/topics/get_decennial).
+
+```{r}
+
+#H003001 is total housing units
+#H003003 is total vacant housing units
+
+
+vacant_housing_OR <- get_decennial(
+  geography = "tract",   # level of geography
+  state = "OR",          # limit by state
+  variables = c(total_housing = "H003001", vacant_housing = "H003003"),    # the census variables are labeled
+  year = 2010,
+  geometry = TRUE          #returns geo info, for later mapping
+)
+
+#sf1 is the default for the 2000 and 2010 censuses; if you want to use "sf2" you would include the line sumfile = "sf2"
+
+```
+
+In the code chunk below, the data query is repeated but for each state (i.e., at the state level)
+
+```{r}
+
+vacant_housing_states <- get_decennial(
+  geography = "state",   # level of geography
+  variables = c(total_housing = "H003001", vacant_housing = "H003003"),    # the census variables are labeled
+  year = 2010,
+    geometry = TRUE          #returns geo info, for later mapping
+)
+ 
+```
+
+The code chunk below shows yet another way to query the housing data. In this example, we're getting the vacancy data for each county in Oregon.
+
+```{r}
+
+vacant_housing_or_county <- get_decennial(
+  geography = "county",   # level of geography
+  state = "OR",          # can limit by state
+  variables = c(total_housing = "H003001", vacant_housing = "H003003"),    # the census variables are labeled
+  year = 2010,
+  geometry = TRUE          #returns geo info, for later mapping
+)
+
+```
+
+The code chunk below shows yet another way to query the housing data. In this example, we're getting the vacancy data for each zip code tabulation area in Oregon.
+
+```{r}
+
+vacant_housing_or_zipcode <- get_decennial(
+  geography = "zcta",   # level of geography
+  state = "OR",          # can limit by state
+  variables = c(total_housing = "H003001", vacant_housing = "H003003"),    # the census variables are labeled
+  year = 2010,
+  geometry = TRUE          #returns geo info, for later mapping
+)
+
+```
+
+Remember that what we're interested in comparing is the percent vacancy rather than the number of vacancies. One way to do this is to use separate columns for total_housing and vacant_housing and then use the mutate function to create a new column for percent vacancy.
+
+Adding the output = "wide" argument to the get_decennial( ) function separates the total_housing and vacant_housing into separate columns. To do this, we can use the output = "wide" argument; this is done for the four data sets that we are interested in. You should also notice that the number of observations in vacant_housing_wide is half that of vacant_housing.
+
+```{r}
+
+vacant_housing_OR_wide <- get_decennial(
+  geography = "tract",   # level of geography
+  state = "OR",          # limit by state
+  variables = c(total_housing = "H003001", vacant_housing = "H003003"),    # the census variables are labeled
+  year = 2010,
+  output = "wide",
+  geometry = TRUE          #returns geo info, for later mapping
+)
+
+vacant_housing_states_wide <- get_decennial(
+  geography = "state",   # level of geography
+  variables = c(total_housing = "H003001", vacant_housing = "H003003"),    # the census variables are labeled
+    year = 2010,
+    output = "wide",
+    geometry = TRUE          #returns geo info, for later mapping
+)
+
+vacant_housing_or_county_wide <- get_decennial(
+  geography = "county",   # level of geography
+  state = "OR",          # can limit by state
+  variables = c(total_housing = "H003001", vacant_housing = "H003003"),    # the census variables are labeled
+  year = 2010,
+  output = "wide",
+  geometry = TRUE          #returns geo info, for later mapping
+)
+
+vacant_housing_or_zip_wide <- get_decennial(
+  geography = "zcta",   # level of geography
+  state = "OR",          # can limit by state
+  variables = c(total_housing = "H003001", vacant_housing = "H003003"),    # the census variables are labeled
+  year = 2010,
+  output = "wide",
+  geometry = TRUE          #returns geo info, for later mapping
+)
+
+```
+
+Use mutate to calculate % vacancy and add a "percent_vacancy" column; the code chunks below save the mutated data file to a data frame for each of the four data sets.
+
+```{r}
+
+vacant_housing_states_wide <- vacant_housing_states_wide|>
+  mutate(percent_vacancy=vacant_housing*100/total_housing)
+
+vacant_housing_or_county_wide <- vacant_housing_or_county_wide|>
+  mutate(percent_vacancy=vacant_housing*100/total_housing)
+
+```
+
+```{r}
+  
+vacant_housing_or_zip_wide <- vacant_housing_or_zip_wide|>
+  mutate(percent_vacancy=vacant_housing*100/total_housing)
+
+vacant_housing_OR_wide <- vacant_housing_OR_wide|>
+  mutate(percent_vacancy=vacant_housing*100/total_housing)
+```
+
+It is sometimes helpful to visualize The relevant information. In the code chunk below, ggplot is used to show the vacancy rate of all the states in order from lowest to highest percentage.
+
+```{r}
+
+ggplot(vacant_housing_states_wide, mapping=aes(x=percent_vacancy, y=reorder(NAME, percent_vacancy)))+
+  geom_point()
+
+
+```
+
+We can make a similar graph showing the ordered % vacancy as a function of county in Oregon; this is done in the code chunk below. Note that since there are so many zip codes and census tracts in OR, it doesn't make sense to graph this information.
+
+```{r}
+
+
+ggplot(vacant_housing_or_county_wide, mapping=aes(x=percent_vacancy, y=reorder(NAME, percent_vacancy)))+
+  geom_point()
+
+
+```
+
+The formatting on this plots is problematic because of the long names used in the y-axis label. We can use the `str_remove( )` function to pull out the essential components of the names.
+
+```{r}
+
+or_vacancy_by_county <- vacant_housing_or_county_wide|> 
+  mutate(percent_vacancy=vacant_housing*100/total_housing)|> 
+  mutate(NAME = str_remove(NAME, ",.*$"))|> #removes what comes after the comma in the name (i.e., Oregon)
+  mutate(NAME = str_remove(NAME, "County"))  #removes "County" from each name  
+
+#based on the changes made to NAME, it's more appropriate to rename the column "County"
+
+or_vacancy_by_county <-rename(or_vacancy_by_county, "County" = "NAME")
+```
+
+Now we can use ggplot to produce a much cleaner plot
+
+```{r}
+
+ggplot(or_vacancy_by_county, mapping=aes(x=percent_vacancy, y=reorder(County, percent_vacancy)))+  
+  geom_point()
+```
+
+Even though we haven't graphed the % vacant housing as a function of zip code, we can simplify that data set as well. This will be useful when we want to match census data to drinking water data
+
+```{r}
+
+or_vacancy_by_zip <- vacant_housing_or_zip_wide|>
+  mutate(percent_vacancy=vacant_housing*100/total_housing)|>
+  mutate(NAME = str_remove(NAME, "ZCTA5")) |> #removes the ZCTA5 from each name
+  mutate(NAME = str_remove(NAME, ",.*$")) #removes all text after and including the comma
+
+#based on the changes made to NAME, it's more appropriate to rename the column zip_code
+
+or_vacancy_by_zip <-rename(or_vacancy_by_zip, "zip_code" = "NAME")
+```
+
+## Your turn...
+
+Make a plot of the percent of the population in renter occupied housing as a function of state and Oregon county based on the 2010 decennial census. Recall that this information is in the "sf2" data set. We found that the relevant variables are HCT002001 (total population in occupied housing units) and HCT002004 (total population in renter occupied housing using units).
+
+```{r}
+
+```
+
+#### Answer
+
+```{r}
+
+#HCT002001 is total population in occupied housing units
+#HCT002004 is total population in renter occupied housing units
+
+renter_pop_state <- get_decennial(
+  geography = "state",   # level of geography
+  variables = c(tot_pop = "HCT002001", renter_pop = "HCT002004"),    # the census variables are labeled
+  year = 2010,
+  output = "wide",
+  sumfile = "sf2",
+  geometry = TRUE          #returns geo info, for later mapping
+)
+
+renter_pop_state <- renter_pop_state |>
+  mutate(percent_renters=renter_pop*100/tot_pop)
+
+ggplot(renter_pop_state, mapping=aes(x=percent_renters, y=reorder(NAME, percent_renters)))+
+  geom_point()
+
+
+
+renter_pop_or <- get_decennial(
+  geography = "county",   # level of geography
+  state = "OR",          # can limit by state
+  variables = c(tot_pop = "HCT002001", renter_pop = "HCT002004"),    # the census variables are labeled
+  year = 2010,
+  output = "wide",
+  sumfile = "sf2",
+  geometry = TRUE          #returns geo info, for later mapping
+)
+
+renter_pop_or <- renter_pop_or |>
+  mutate(percent_renters=renter_pop*100/tot_pop)|>
+  mutate(NAME = str_remove(NAME, ",.*$"))|> #removes what comes after the comma in the name (i.e., Oregon)
+  mutate(NAME = str_remove(NAME, "County"))  #removes "County" from each name  
+
+#based on the changes made to NAME, it's more appropriate to rename the column "County"
+
+renter_pop_or <-rename(renter_pop_or, "County" = "NAME")
+
+
+ggplot(renter_pop_or, mapping=aes(x=percent_renters, y=reorder(County, percent_renters)))+
+  geom_point()
+
+```
+
+## Querying Data From American Community Survey (ACS)
+
+Now let's look at how to get data from the ACS using the `get_acs()` function. Documentation on this function is available at this [get_acs function webpage](https://www.rdocumentation.org/packages/tidycensus/versions/1.6.7/topics/get_acs). If you are interested in a choropleth map of ACS census data, you will need information sf (simple feature) geometry data; this data, however, is currently not allowed.
+
+In our example, we'll look at the ratio of income to poverty level (variable ID = C17002) as a function of zip code in Michigan and in Oregon, county in Oregon, and by state for the year 2021 as a 5-year average.
+
+```{r}
+
+vars_2021 <- load_variables(2021, "acs5", cache = TRUE)
+
+# first get the data for Michigan by zip code
+
+income_poverty_ratio_zip <- get_acs(
+  geography = "zcta", # zcta="zip code tabulation area"
+  variables = "C17002_001",
+  year = 2021,       # Later than 2021 doesn't allow for geometry :/
+  survey = "acs5",   # 5-year estimates
+  geometry = TRUE)    # Include spatial data for mapping- works for 2021 and earlier for zcta 
+#  output= "wide"     #transforms the data for us
+
+
+```
+
+`get_acs()` use C17002?
+
+```{r}
+
+
+zipcode_pop_data <- get_acs(
+  geography = "zcta", # zcta="zip code tabulation area"
+  #state = "OR",    # zcta doesn't work with state & county params
+  #county="Multnomah",
+  variables = c(
+    population="B01003_001"
+  ),
+  year = 2021,       # Later than 2021 doesn't allow for geometry :/
+  survey = "acs5",   # 5-year estimates
+  geometry = TRUE,    # Include spatial data for mapping- works for 2021 and earlier for zcta 
+#  output= "wide"     #transforms the data for us
+)
+```
+
+### Your Turn!
+
+- Find one or more variables you're interested in.
+- Use `get_acs()` and/or `get_decennial()` to get the relevant data.
+- Mutate and/or graph the data as appropriate.
+
+```{r}
+
+
+
+
+
+
+
+
+
+```
+
+------------------------------------------------------------------------
+
+## Using geometry and sf for mapping
+
+We'll create a choropleth map showing the percent of vacant housing by census tract in Oregon from the 2020 decennial census. First we need to calculate the percent using `mutate`:
+
+```{r}
+
+#calculate percentage
+# create new column "percent_vacant":
+
+vacant_housing_final<-vacant_housing_wide |>
+  mutate(percent_vacant=(vacant_housing/total_housing)*100)
+
+
+```
+
+Now we can map with `ggplot` and `geom_sf`:
+
+```{r}
+ggplot(vacant_housing_final) +
+    geom_sf(mapping=aes(fill = percent_vacant)) +
+    scale_fill_viridis_c(               # this function addresses the legend and color scale
+      name = "% Vacant Residencies",
+      limits = c(0, 100),  # Adjust these limits based on your data
+      labels = scales::label_number(suffix = "%")
+    ) +
+    theme_void() + #removes axes 
+    labs(title="Percentage of vacant residencies in Oregon, by census tract, 2020")
+
+
+#save your map to a file:
+ggsave(filename="orVacantHousingByTract.jpg", plot=last_plot())
+```
+
+------------------------------------------------------------------------
+
+## Merging with another data set
+
+Let's look at a sample problem. The state of Washington publishes data on vehicle registrations by class (e.g. gasoline, electric, hybrid, etc.) and county from 2017 to present ([source](https://catalog.data.gov/dataset/vehicle-registrations-by-class-and-county)). Let's say we're interested in rates of EV/hybrid purchases per 1,000 residents by county. Have some counties experienced more growth in EV/hybrid purchase rates than others?
+
+Let's look at the data (it's pre-loaded as a csv):
+
+```{r}
+
+
+waVehicleData<-read_csv("Vehicle_Registrations_by_Class_and_County.csv")
+
+
+
+```
+
+```{r}
+
+
+# see what we're dealing with
+unique(waVehicleData$`Fiscal Year`)
+unique(waVehicleData$`Fuel Type`)
+unique(waVehicleData$`Residential County`)
+```
+
+If our longer term goal is to calculate purchase rates by county per year, let's aggregate the data. We can get purchase counts of hybrid and EV vehicles, and then get county population counts using tidycensus. Looking ahead, one thing to consider is that acs data is only available through 2023. So let's limit by EV and hybrid purchases, and just look at 2017 and 2023:
+
+```{r}
+
+evHybridSummary <-waVehicleData %>%
+  filter((`Fiscal Year`==2017 | `Fiscal Year`==2023) &
+           (`Fuel Type`=="Hybrid" |`Fuel Type`=="Electric") &
+           (`Residential County` !="Out of State")) %>%
+  group_by(`Residential County`,`Fiscal Year`) %>%
+  summarize(numPurchased=sum(Counts))
+  
+  
+  
+
+
+
+
+
+```
+
+Now query acs5 population by county for Washington, 2017 & 2023, and bind the data sets together:
+
+```{r}
+
+yr<-2017
+pop17<- get_acs(
+  geography = "county",
+  state="WA",
+  variables = c(population="B01003_001"),
+  year=yr,
+  survey = "acs5",
+  geometry = TRUE
+  
+)%>%
+  mutate("Fiscal Year" = yr)
+
+
+yr<-2023
+pop23<- get_acs(
+  geography = "county",
+  state="WA",
+  variables = c(population="B01003_001"),
+  year=yr,
+  survey = "acs5",
+  geometry = TRUE
+  
+)%>%
+  mutate("Fiscal Year" = yr)
+
+waPopTwoYears<-rbind(pop17, pop23)
+
+
+
+
+```
+
+You can also do the same thing this way, with a loop-like structure:\
+
+```         
+years <- c(2017,2023)
+
+waPopTwoYears <- map_dfr(years, function(yr) {
+  get_acs(
+    geography = "county",
+    state = "WA",
+    variables = "B01003_001",
+    year = yr,
+    survey = "acs5",
+    geometry = TRUE
+  ) %>%
+    mutate("Fiscal Year" = yr)
+})    
+```
+
+We want to calculate purchases per population, so we need to join the data sets in order to use `mutate` to calculate the rate. We can join on year and county name, but the county name columns don't match (e.g. "Benton County, Washington" and "Benton"). So let's use `mutate` to create a column with matching header ("Residential County") and strip the " County, Washington":
+
+```{r}
+
+waPopTwoYears <-waPopTwoYears %>%
+  mutate("Residential County"= str_remove(NAME," County, Washington$"))
+
+
+```
+
+Now we can join the data sets:
+
+```{r}
+# must now join on 2 columns, county & year
+mergedEvData<-left_join(waPopTwoYears, evHybridSummary, by=c("Fiscal Year",
+                                                            "Residential County"))
+
+```
+
+And use mutate to calculate purchases per 1000 residents:
+
+```{r}
+
+mergedEvData <- mergedEvData %>%
+  mutate(purchasesPerK=(numPurchased/estimate)*1000)
+
+```
+
+line plot:
+
+```{r}
+
+
+
+```
+
+maps of 2017 and 2023:
+
+```{r}
+
+mergedEvData %>%
+  filter(`Fiscal Year`==2017)%>%
+  ggplot()+
+  geom_sf(mapping=aes(fill=purchasesPerK))+
+  scale_fill_viridis_c(
+    limits=c(0,80)
+  )+
+  theme_void()
+```
+
+Your turn (time/interest permitting)
+
+The data set `Hospital_General_Information.csv` (source: <https://data.cms.gov/provider-data/dataset/xubh-q36u>) has information on current hospitals in the United States that have been registered with Medicaid. What sorts of questions could you investigate, when combined with census data? ACS data could provide information on [elderly populations](https://censusreporter.org/tables/B01001/), [uninsured populations](https://censusreporter.org/tables/B27010/), etc.
